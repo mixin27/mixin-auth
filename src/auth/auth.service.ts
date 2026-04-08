@@ -146,6 +146,66 @@ export class AuthService {
     };
   }
 
+  async linkGoogleAccount(input: {
+    userId: string;
+    providerAccountId: string;
+    email: string;
+    name?: string;
+  }) {
+    const email = input.email.toLowerCase();
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: input.userId },
+      select: { id: true, email: true, name: true, emailVerifiedAt: true },
+    });
+    if (!user) throw new UnauthorizedException('User not found');
+
+    // Safety: only allow linking if Google email matches the logged-in user's email.
+    if (user.email.toLowerCase() !== email) {
+      throw new ForbiddenException('Google email does not match current user email');
+    }
+
+    const existing = await this.prisma.account.findUnique({
+      where: {
+        provider_providerAccountId: {
+          provider: 'GOOGLE',
+          providerAccountId: input.providerAccountId,
+        },
+      },
+      select: { userId: true },
+    });
+
+    if (existing && existing.userId !== user.id) {
+      throw new ForbiddenException('Google account is already linked to another user');
+    }
+
+    if (!existing) {
+      await this.prisma.account.create({
+        data: {
+          userId: user.id,
+          provider: 'GOOGLE',
+          providerAccountId: input.providerAccountId,
+        },
+      });
+    }
+
+    // Mark email verified if not already.
+    if (!user.emailVerifiedAt) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { emailVerifiedAt: new Date(), name: user.name ?? input.name },
+      });
+    } else if (!user.name && input.name) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { name: input.name },
+      });
+    }
+
+    const acceptedOrgIds = await this.acceptPendingInvitationsForEmail(user.id, email);
+    return { ok: true, acceptedOrgIds };
+  }
+
   private async acceptPendingInvitationsForEmail(userId: string, email: string): Promise<string[]> {
     const now = new Date();
     const invites = await this.prisma.orgInvitation.findMany({

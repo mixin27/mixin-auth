@@ -155,5 +155,54 @@ export class GoogleAuthService {
       name,
     });
   }
+
+  async handleLinkCallback(params: {
+    userId: string;
+    sessionId: string;
+    currentOrgId?: string;
+    code: string;
+    state: string;
+    expectedState: string;
+    codeVerifier: string;
+    expectedNonce?: string;
+  }) {
+    if (params.state !== params.expectedState) {
+      throw new UnauthorizedException('OAuth state mismatch');
+    }
+
+    const tokenRes = await this.exchangeCodeForTokens({
+      code: params.code,
+      codeVerifier: params.codeVerifier,
+    });
+
+    const idTokenPayload = await verifyGoogleIdToken({
+      idToken: tokenRes.id_token,
+      audience: this.getGoogleClientId(),
+      nonce: params.expectedNonce,
+    });
+
+    const providerAccountId = String(idTokenPayload.sub);
+    const email = String(idTokenPayload.email).toLowerCase();
+    const name = idTokenPayload.name ? String(idTokenPayload.name) : undefined;
+
+    const result = await this.auth.linkGoogleAccount({
+      userId: params.userId,
+      providerAccountId,
+      email,
+      name,
+    });
+
+    // If user had no active org and linking accepted an invitation, set session active org.
+    if (!params.currentOrgId && result.acceptedOrgIds.length > 0) {
+      const switched = await this.auth.switchActiveOrg({
+        userId: params.userId,
+        sessionId: params.sessionId,
+        orgId: result.acceptedOrgIds[0],
+      });
+      return { ...result, accessToken: switched.accessToken, activeOrgId: switched.activeOrgId };
+    }
+
+    return result;
+  }
 }
 
