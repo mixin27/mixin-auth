@@ -34,6 +34,11 @@ async function bootstrap() {
     .setTitle('mixin-auth')
     .setDescription('Standalone auth service (users, sessions, orgs, RBAC)')
     .setVersion('0.1.0')
+    .addTag('auth')
+    .addTag('oauth')
+    .addTag('orgs')
+    .addTag('invitations')
+    .addTag('jwks')
     .addBearerAuth(
       {
         type: 'http',

@@ -1,6 +1,7 @@
 import { Body, Controller, Param, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { AccessTokenGuard } from '../auth/guards/access-token.guard';
 import { OrgsService } from './orgs.service';
 import { InvitationsService } from './invitations.service';
@@ -8,6 +9,7 @@ import { InviteMemberDto } from './dto/invite-member.dto';
 import { AcceptInvitationDto } from './dto/accept-invitation.dto';
 import { REFRESH_COOKIE_NAME } from '../auth/auth.constants';
 
+@ApiTags('invitations')
 @Controller()
 export class InvitationsController {
   constructor(
@@ -18,6 +20,9 @@ export class InvitationsController {
 
   @Post('/v1/orgs/:orgId/invitations')
   @UseGuards(AccessTokenGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Invite member by email (requires org:manage)' })
+  @ApiResponse({ status: 201, description: 'Invitation created (dev returns token)' })
   async invite(
     @Param('orgId') orgId: string,
     @Body() dto: InviteMemberDto,
@@ -34,6 +39,8 @@ export class InvitationsController {
   }
 
   @Post('/v1/orgs/:orgId/invitations/accept')
+  @ApiOperation({ summary: 'Accept invitation (creates user if needed)' })
+  @ApiResponse({ status: 201, description: 'Returns access token and sets refresh cookie' })
   async accept(
     @Param('orgId') orgId: string,
     @Body() dto: AcceptInvitationDto,

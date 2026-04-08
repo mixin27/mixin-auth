@@ -9,6 +9,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { REFRESH_COOKIE_NAME } from './auth.constants';
@@ -18,6 +19,7 @@ import { SwitchActiveOrgDto } from './dto/switch-org.dto';
 import { AccessTokenGuard } from './guards/access-token.guard';
 import { AuthJwtService } from './jwt.service';
 
+@ApiTags('auth')
 @Controller()
 export class AuthController {
   constructor(
@@ -27,11 +29,15 @@ export class AuthController {
   ) {}
 
   @Post('/v1/auth/register')
+  @ApiOperation({ summary: 'Register with email/password' })
+  @ApiResponse({ status: 201, description: 'User created' })
   async register(@Body() dto: RegisterDto) {
     return await this.auth.register(dto);
   }
 
   @Post('/v1/auth/login')
+  @ApiOperation({ summary: 'Login with email/password (sets refresh cookie)' })
+  @ApiResponse({ status: 201, description: 'Access token returned and refresh cookie set' })
   async login(
     @Body() dto: LoginDto,
     @Req() req: Request,
@@ -51,6 +57,8 @@ export class AuthController {
   }
 
   @Post('/v1/auth/refresh')
+  @ApiOperation({ summary: 'Refresh access token (rotates refresh cookie)' })
+  @ApiResponse({ status: 201, description: 'New access token returned and refresh cookie rotated' })
   async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const token = req.cookies?.[REFRESH_COOKIE_NAME];
     if (!token || typeof token !== 'string') {
@@ -67,6 +75,8 @@ export class AuthController {
   }
 
   @Post('/v1/auth/logout')
+  @ApiOperation({ summary: 'Logout (revokes refresh token and clears cookie)' })
+  @ApiResponse({ status: 201, description: 'Logout successful' })
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const token = req.cookies?.[REFRESH_COOKIE_NAME];
     if (token && typeof token === 'string') {
@@ -78,6 +88,8 @@ export class AuthController {
 
   @Post('/v1/sessions/active-org')
   @UseGuards(AccessTokenGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Switch active org for current session' })
   async switchActiveOrg(@Body() dto: SwitchActiveOrgDto, @Req() req: any) {
     const auth = req.auth;
     if (!auth?.sub || !auth?.sid) throw new UnauthorizedException();
@@ -89,6 +101,8 @@ export class AuthController {
   }
 
   @Get('/.well-known/jwks.json')
+  @ApiTags('jwks')
+  @ApiOperation({ summary: 'JWKS for JWT verification' })
   async jwks() {
     return await this.jwt.getJwks();
   }

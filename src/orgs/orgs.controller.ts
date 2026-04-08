@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { AccessTokenGuard } from '../auth/guards/access-token.guard';
 import { CreateOrgDto } from './dto/create-org.dto';
 import { CreateRoleDto } from './dto/create-role.dto';
@@ -8,6 +9,8 @@ import { OrgsService } from './orgs.service';
 import { RbacService } from './rbac.service';
 import { AuthService } from '../auth/auth.service';
 
+@ApiTags('orgs')
+@ApiBearerAuth('access-token')
 @Controller()
 export class OrgsController {
   constructor(
@@ -18,6 +21,8 @@ export class OrgsController {
 
   @Post('/v1/orgs')
   @UseGuards(AccessTokenGuard)
+  @ApiOperation({ summary: 'Create org (seeds owner role + permissions)' })
+  @ApiResponse({ status: 201, description: 'Org created' })
   async createOrg(@Body() dto: CreateOrgDto, @Req() req: Request & any) {
     const userId = req.auth?.sub as string;
     const sessionId = req.auth?.sid as string;
@@ -33,6 +38,7 @@ export class OrgsController {
 
   @Get('/v1/orgs')
   @UseGuards(AccessTokenGuard)
+  @ApiOperation({ summary: 'List orgs for current user' })
   async listMyOrgs(@Req() req: Request & any) {
     const userId = req.auth?.sub as string;
     return await this.orgs.listMyOrgs(userId);
@@ -40,6 +46,7 @@ export class OrgsController {
 
   @Post('/v1/orgs/:orgId/roles')
   @UseGuards(AccessTokenGuard)
+  @ApiOperation({ summary: 'Create role in org (requires rbac:manage)' })
   async createRole(
     @Param('orgId') orgId: string,
     @Body() dto: CreateRoleDto,
@@ -58,6 +65,7 @@ export class OrgsController {
 
   @Post('/v1/orgs/:orgId/members/:userId/roles')
   @UseGuards(AccessTokenGuard)
+  @ApiOperation({ summary: 'Assign roles to member (requires rbac:manage)' })
   async assignRolesToMember(
     @Param('orgId') orgId: string,
     @Param('userId') memberUserId: string,

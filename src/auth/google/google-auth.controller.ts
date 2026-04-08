@@ -1,6 +1,7 @@
 import { Controller, Get, Query, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
+import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { randomBytes } from 'crypto';
 import { GoogleAuthService } from './google-auth.service';
 import { REFRESH_COOKIE_NAME } from '../auth.constants';
@@ -14,6 +15,7 @@ function base64UrlEncode(buf: Buffer): string {
   return buf.toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
 }
 
+@ApiTags('oauth')
 @Controller()
 export class GoogleAuthController {
   constructor(
@@ -22,6 +24,8 @@ export class GoogleAuthController {
   ) {}
 
   @Get('/v1/auth/google/login')
+  @ApiOperation({ summary: 'Start Google OAuth (redirect)' })
+  @ApiResponse({ status: 302, description: 'Redirects to Google' })
   async login(@Res() res: Response) {
     const state = base64UrlEncode(randomBytes(16));
     const nonce = base64UrlEncode(randomBytes(16));
@@ -69,6 +73,8 @@ export class GoogleAuthController {
   }
 
   @Get('/v1/auth/google/callback')
+  @ApiOperation({ summary: 'Google OAuth callback (sets refresh cookie)' })
+  @ApiResponse({ status: 200, description: 'Returns access token and sets refresh cookie' })
   async callback(
     @Query('code') code: string,
     @Query('state') state: string,
