@@ -33,6 +33,7 @@ model User {
     accounts    Account[]
     sessions    Session[]
     memberships OrgMembership[]
+    orgInvitations OrgInvitation[]
 
     @@index([createdAt])
 }
@@ -86,6 +87,7 @@ model Org {
     memberships OrgMembership[]
     roles       Role[]
     sessions    Session[]
+    invitations OrgInvitation[]
 
     @@index([createdAt])
 }
@@ -121,6 +123,7 @@ model Role {
 
     permissions RolePermission[]
     members     MembershipRole[]
+    invitationRoles OrgInvitationRole[]
 
     @@unique([orgId, key])
     @@index([orgId])
@@ -159,4 +162,40 @@ model MembershipRole {
     role       Role          @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
     @@id([membershipId, roleId])
+}
+
+model OrgInvitation {
+  id             String @id @default(cuid())
+  orgId          String
+  invitedEmail  String
+  tokenHash     String @unique
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  acceptedAt    DateTime?
+
+  // For audit trails / admin UI.
+  invitedByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org Org @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  invitedByUser User? @relation(fields: [invitedByUserId], references: [id], onDelete: SetNull)
+
+  roles OrgInvitationRole[]
+
+  @@index([orgId])
+  @@index([invitedEmail])
+  @@index([expiresAt])
+}
+
+model OrgInvitationRole {
+  invitationId String
+  roleId       String
+  createdAt    DateTime @default(now())
+
+  invitation OrgInvitation @relation(fields: [invitationId], references: [id], onDelete: Cascade)
+  role       Role          @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([invitationId, roleId])
 }

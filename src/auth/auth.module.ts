@@ -18,7 +18,7 @@ import { RefreshTokenService } from './refresh-token.service';
     AccessTokenGuard,
     GoogleAuthService,
   ],
-  exports: [AuthService, AuthJwtService, AccessTokenGuard],
+  exports: [AuthService, AuthJwtService, AccessTokenGuard, RefreshTokenService],
 })
 export class AuthModule {}
 
