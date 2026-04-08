@@ -4,8 +4,8 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
+import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RefreshTokenService } from './refresh-token.service';
 import { AuthJwtService } from './jwt.service';
@@ -16,7 +16,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly refreshTokens: RefreshTokenService,
     private readonly jwt: AuthJwtService,
-    private readonly config: ConfigService,
+    private readonly audit: AuditService,
   ) {}
 
   async register(input: { email: string; password: string; name?: string }) {
@@ -41,6 +41,15 @@ export class AuthService {
         provider: 'EMAIL',
         providerAccountId: user.email,
       },
+    });
+
+    await this.audit.log({
+      eventType: 'AUTH_REGISTER',
+      outcome: 'SUCCESS',
+      actorUserId: user.id,
+      targetType: 'USER',
+      targetId: user.id,
+      metadata: { email: user.email },
     });
 
     return { user };
@@ -135,6 +144,17 @@ export class AuthService {
       perms,
     });
 
+    await this.audit.log({
+      eventType: 'AUTH_OAUTH_LOGIN',
+      outcome: 'SUCCESS',
+      actorUserId: userId,
+      orgId: activeOrgId ?? undefined,
+      sessionId: session.id,
+      targetType: 'SESSION',
+      targetId: session.id,
+      metadata: { provider: input.provider, acceptedInvitations: acceptedOrgIds.length },
+    });
+
     return {
       accessToken,
       refreshToken: refreshRaw,
@@ -176,6 +196,14 @@ export class AuthService {
     });
 
     if (existing && existing.userId !== user.id) {
+      await this.audit.log({
+        eventType: 'AUTH_OAUTH_GOOGLE_LINK',
+        outcome: 'FAILURE',
+        actorUserId: user.id,
+        targetType: 'ACCOUNT',
+        targetId: input.providerAccountId,
+        metadata: { reason: 'already_linked_to_other_user' },
+      });
       throw new ForbiddenException('Google account is already linked to another user');
     }
 
@@ -203,6 +231,14 @@ export class AuthService {
     }
 
     const acceptedOrgIds = await this.acceptPendingInvitationsForEmail(user.id, email);
+    await this.audit.log({
+      eventType: 'AUTH_OAUTH_GOOGLE_LINK',
+      outcome: 'SUCCESS',
+      actorUserId: user.id,
+      targetType: 'ACCOUNT',
+      targetId: input.providerAccountId,
+      metadata: { acceptedOrgIdsCount: acceptedOrgIds.length },
+    });
     return { ok: true, acceptedOrgIds };
   }
 
@@ -265,11 +301,45 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({
       where: { email: input.email.toLowerCase() },
     });
-    if (!user || !user.passwordHash) throw new UnauthorizedException('Invalid credentials');
-    if (user.disabledAt) throw new ForbiddenException('User is disabled');
+    if (!user || !user.passwordHash) {
+      await this.audit.log({
+        eventType: 'AUTH_LOGIN_PASSWORD',
+        outcome: 'FAILURE',
+        targetType: 'USER',
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        metadata: { email: input.email.toLowerCase(), reason: 'invalid_credentials' },
+      });
+      throw new UnauthorizedException('Invalid credentials');
+    }
+    if (user.disabledAt) {
+      await this.audit.log({
+        eventType: 'AUTH_LOGIN_PASSWORD',
+        outcome: 'FAILURE',
+        actorUserId: user.id,
+        targetType: 'USER',
+        targetId: user.id,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        metadata: { reason: 'user_disabled' },
+      });
+      throw new ForbiddenException('User is disabled');
+    }
 
     const ok = await argon2.verify(user.passwordHash, input.password);
-    if (!ok) throw new UnauthorizedException('Invalid credentials');
+    if (!ok) {
+      await this.audit.log({
+        eventType: 'AUTH_LOGIN_PASSWORD',
+        outcome: 'FAILURE',
+        actorUserId: user.id,
+        targetType: 'USER',
+        targetId: user.id,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        metadata: { reason: 'invalid_credentials' },
+      });
+      throw new UnauthorizedException('Invalid credentials');
+    }
 
     const activeOrgId =
       input.orgId ?? (await this.findDefaultOrgIdForUser(user.id));
@@ -300,6 +370,18 @@ export class AuthService {
       org_id: activeOrgId ?? undefined,
       roles,
       perms,
+    });
+
+    await this.audit.log({
+      eventType: 'AUTH_LOGIN_PASSWORD',
+      outcome: 'SUCCESS',
+      actorUserId: user.id,
+      orgId: activeOrgId ?? undefined,
+      sessionId: session.id,
+      targetType: 'SESSION',
+      targetId: session.id,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
     });
 
     return {
@@ -344,6 +426,16 @@ export class AuthService {
       perms,
     });
 
+    await this.audit.log({
+      eventType: 'AUTH_REFRESH',
+      outcome: 'SUCCESS',
+      actorUserId: updated.userId,
+      orgId: updated.activeOrgId ?? undefined,
+      sessionId: updated.id,
+      targetType: 'SESSION',
+      targetId: updated.id,
+    });
+
     return {
       accessToken,
       refreshToken: newRaw,
@@ -356,9 +448,14 @@ export class AuthService {
 
   async logout(rawRefreshToken: string) {
     const refreshHash = this.refreshTokens.hash(rawRefreshToken);
-    await this.prisma.session.updateMany({
+    const res = await this.prisma.session.updateMany({
       where: { refreshTokenHash: refreshHash, revokedAt: null },
       data: { revokedAt: new Date() },
+    });
+    await this.audit.log({
+      eventType: 'AUTH_LOGOUT',
+      outcome: 'SUCCESS',
+      metadata: { revokedSessions: res.count },
     });
     return { ok: true };
   }
@@ -392,6 +489,16 @@ export class AuthService {
       org_id: session.activeOrgId ?? undefined,
       roles,
       perms,
+    });
+
+    await this.audit.log({
+      eventType: 'AUTH_SWITCH_ORG',
+      outcome: 'SUCCESS',
+      actorUserId: session.userId,
+      orgId: session.activeOrgId ?? undefined,
+      sessionId: session.id,
+      targetType: 'ORG',
+      targetId: session.activeOrgId ?? undefined,
     });
 
     return { accessToken, activeOrgId: session.activeOrgId, roles, perms };

@@ -34,6 +34,7 @@ model User {
     sessions    Session[]
     memberships OrgMembership[]
     orgInvitations OrgInvitation[]
+    auditEvents AuditEvent[]
 
     @@index([createdAt])
 }
@@ -88,6 +89,7 @@ model Org {
     roles       Role[]
     sessions    Session[]
     invitations OrgInvitation[]
+    auditEvents AuditEvent[]
 
     @@index([createdAt])
 }
@@ -198,4 +200,33 @@ model OrgInvitationRole {
   role       Role          @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@id([invitationId, roleId])
+}
+
+model AuditEvent {
+  id String @id @default(cuid())
+  eventType String
+  outcome   String
+
+  actorUserId String?
+  orgId       String?
+  sessionId   String?
+
+  targetType String?
+  targetId   String?
+
+  ip        String?
+  userAgent String?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  actorUser User? @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  org       Org?  @relation(fields: [orgId], references: [id], onDelete: SetNull)
+
+  @@index([eventType])
+  @@index([outcome])
+  @@index([actorUserId])
+  @@index([orgId])
+  @@index([createdAt])
 }

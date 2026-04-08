@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { AuditService } from '../audit/audit.service';
 import { AuthService } from '../auth/auth.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DEFAULT_OWNER_PERMISSIONS, OWNER_ROLE_KEY } from './orgs.constants';
@@ -16,6 +17,7 @@ export class OrgsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auth: AuthService,
+    private readonly audit: AuditService,
   ) {}
 
   async createOrg(input: CreateOrgInput) {
@@ -78,6 +80,14 @@ export class OrgsService {
     });
 
     if (!input.activate) {
+      await this.audit.log({
+        eventType: 'ORG_CREATE',
+        outcome: 'SUCCESS',
+        actorUserId: input.userId,
+        orgId: org.id,
+        targetType: 'ORG',
+        targetId: org.id,
+      });
       return org;
     }
 
@@ -85,6 +95,17 @@ export class OrgsService {
       userId: input.userId,
       sessionId: input.sessionId,
       orgId: org.id,
+    });
+
+    await this.audit.log({
+      eventType: 'ORG_CREATE',
+      outcome: 'SUCCESS',
+      actorUserId: input.userId,
+      orgId: org.id,
+      targetType: 'ORG',
+      targetId: org.id,
+      sessionId: input.sessionId,
+      metadata: { activated: true },
     });
 
     return {

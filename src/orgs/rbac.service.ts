@@ -1,9 +1,13 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class RbacService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   async assertOrgPermission(userId: string, orgId: string, permissionKey: string) {
     const membership = await this.prisma.orgMembership.findUnique({
@@ -38,6 +42,7 @@ export class RbacService {
   }
 
   async createRoleWithPermissions(input: {
+    actorUserId?: string;
     orgId: string;
     key: string;
     name: string;
@@ -67,10 +72,21 @@ export class RbacService {
       skipDuplicates: true,
     });
 
+    await this.audit.log({
+      eventType: 'RBAC_ROLE_CREATE',
+      outcome: 'SUCCESS',
+      actorUserId: input.actorUserId,
+      orgId: input.orgId,
+      targetType: 'ROLE',
+      targetId: role.id,
+      metadata: { key: input.key, permissions: input.permissionKeys },
+    });
+
     return role;
   }
 
   async assignRolesToMember(input: {
+    actorUserId?: string;
     orgId: string;
     memberUserId: string;
     roleKeys: string[];
@@ -102,6 +118,16 @@ export class RbacService {
     await this.prisma.membershipRole.createMany({
       data: roleRows.map((r) => ({ membershipId: membership.id, roleId: r.id })),
       skipDuplicates: true,
+    });
+
+    await this.audit.log({
+      eventType: 'RBAC_ROLE_ASSIGN',
+      outcome: 'SUCCESS',
+      actorUserId: input.actorUserId,
+      orgId: input.orgId,
+      targetType: 'MEMBERSHIP',
+      targetId: membership.id,
+      metadata: { memberUserId: input.memberUserId, roleKeys: input.roleKeys, mode: input.mode },
     });
 
     return { ok: true };

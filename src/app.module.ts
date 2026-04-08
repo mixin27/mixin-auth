@@ -5,6 +5,7 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { AuditModule } from './audit/audit.module';
 import { envSchema } from './config/env';
 import { PrismaModule } from './prisma/prisma.module';
 import { OrgsModule } from './orgs/orgs.module';
@@ -21,6 +22,7 @@ import { OrgsModule } from './orgs/orgs.module';
         limit: 120,
       },
     ]),
+    AuditModule,
     PrismaModule,
     AuthModule,
     OrgsModule,

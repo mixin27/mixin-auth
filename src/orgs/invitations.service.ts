@@ -1,10 +1,10 @@
 import {
-  BadRequestException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
   ForbiddenException,
 } from '@nestjs/common';
+import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from '../auth/auth.service';
 import { RefreshTokenService } from '../auth/refresh-token.service';
@@ -19,6 +19,7 @@ export class InvitationsService {
     private readonly prisma: PrismaService,
     private readonly auth: AuthService,
     private readonly refreshTokens: RefreshTokenService,
+    private readonly audit: AuditService,
   ) {}
 
   async createInvitation(input: {
@@ -98,6 +99,16 @@ export class InvitationsService {
         skipDuplicates: true,
       });
     }
+
+    await this.audit.log({
+      eventType: 'INVITATION_CREATE',
+      outcome: 'SUCCESS',
+      actorUserId: input.invitedByUserId,
+      orgId: input.orgId,
+      targetType: 'INVITATION',
+      targetId: invite.id,
+      metadata: { invitedEmail, roleKeys: input.roleKeys },
+    });
 
     return { invitationId: invite.id, token: rawToken, expiresAt };
   }
@@ -232,6 +243,17 @@ export class InvitationsService {
       { email, password, orgId: params.orgId },
       { ip: params.meta.ip, userAgent: params.meta.userAgent },
     );
+
+    await this.audit.log({
+      eventType: 'INVITATION_ACCEPT',
+      outcome: 'SUCCESS',
+      actorUserId: user.id,
+      orgId: params.orgId,
+      targetType: 'INVITATION',
+      targetId: invitation.id,
+      ip: params.meta.ip,
+      userAgent: params.meta.userAgent,
+    });
 
     return login;
   }

@@ -56,6 +56,7 @@ export class OrgsController {
     const org = await this.orgs.getOrgBySlug(orgId);
     await this.rbac.assertOrgPermission(userId, org.id, 'rbac:manage');
     return await this.rbac.createRoleWithPermissions({
+      actorUserId: userId,
       orgId: org.id,
       key: dto.key,
       name: dto.name,
@@ -76,6 +77,7 @@ export class OrgsController {
     const org = await this.orgs.getOrgBySlug(orgId);
     await this.rbac.assertOrgPermission(userId, org.id, 'rbac:manage');
     return await this.rbac.assignRolesToMember({
+      actorUserId: userId,
       orgId: org.id,
       memberUserId,
       roleKeys: dto.roleKeys,
