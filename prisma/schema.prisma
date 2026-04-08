@@ -1,0 +1,162 @@
+generator client {
+    provider     = "prisma-client"
+    output       = "../src/generated/prisma"
+    moduleFormat = "cjs"
+}
+
+datasource db {
+    provider = "postgresql"
+}
+
+enum AccountProvider {
+    EMAIL
+    GOOGLE
+}
+
+enum MembershipStatus {
+    ACTIVE
+    INVITED
+    SUSPENDED
+}
+
+model User {
+    id              String    @id @default(cuid())
+    email           String    @unique
+    emailVerifiedAt DateTime?
+    passwordHash    String?
+    name            String?
+    disabledAt      DateTime?
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    accounts    Account[]
+    sessions    Session[]
+    memberships OrgMembership[]
+
+    @@index([createdAt])
+}
+
+model Account {
+    id                String          @id @default(cuid())
+    userId            String
+    provider          AccountProvider
+    providerAccountId String
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    @@unique([provider, providerAccountId])
+    @@index([userId])
+}
+
+model Session {
+    id               String    @id @default(cuid())
+    userId           String
+    refreshTokenHash String
+    expiresAt        DateTime
+    revokedAt        DateTime?
+
+    ip        String?
+    userAgent String?
+
+    activeOrgId String?
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+    activeOrg Org? @relation(fields: [activeOrgId], references: [id], onDelete: SetNull)
+
+    @@index([userId])
+    @@index([expiresAt])
+    @@index([revokedAt])
+}
+
+model Org {
+    id   String @id @default(cuid())
+    slug String @unique
+    name String
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    memberships OrgMembership[]
+    roles       Role[]
+    sessions    Session[]
+
+    @@index([createdAt])
+}
+
+model OrgMembership {
+    id     String           @id @default(cuid())
+    orgId  String
+    userId String
+    status MembershipStatus @default(ACTIVE)
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    org  Org  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+    user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    roles MembershipRole[]
+
+    @@unique([orgId, userId])
+    @@index([userId])
+}
+
+model Role {
+    id    String @id @default(cuid())
+    orgId String
+    key   String
+    name  String
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    org Org @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+    permissions RolePermission[]
+    members     MembershipRole[]
+
+    @@unique([orgId, key])
+    @@index([orgId])
+}
+
+model Permission {
+    id   String @id @default(cuid())
+    key  String @unique
+    name String
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    roles RolePermission[]
+}
+
+model RolePermission {
+    roleId       String
+    permissionId String
+
+    createdAt DateTime @default(now())
+
+    role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+    permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+    @@id([roleId, permissionId])
+}
+
+model MembershipRole {
+    membershipId String
+    roleId       String
+
+    createdAt DateTime @default(now())
+
+    membership OrgMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+    role       Role          @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+    @@id([membershipId, roleId])
+}

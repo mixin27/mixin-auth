@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: mixin
+      POSTGRES_PASSWORD: mixin
+      POSTGRES_DB: mixin_auth
+    ports:
+      - "5432:5432"
+    volumes:
+      - mixin_auth_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mixin -d mixin_auth"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://mixin:mixin@db:5432/mixin_auth?schema=public
+
+      AUTH_ISSUER: mixin-auth
+      AUTH_AUDIENCE: api
+      AUTH_JWT_KID: dev-kid
+      # Dev-only fallback (HS256). For production, set AUTH_JWT_PRIVATE_KEY_PEM and AUTH_JWT_PUBLIC_KEY_PEM.
+      AUTH_JWT_HS_SECRET: dev-jwt-secret
+
+      REFRESH_TOKEN_PEPPER: dev-refresh-pepper-1234
+
+      CORS_ALLOWED_ORIGINS: http://localhost:5173,http://localhost:3000
+      COOKIE_SECURE: "false"
+      COOKIE_SAMESITE: lax
+    ports:
+      - "3000:3000"
+
+volumes:
+  mixin_auth_pg:
+
