@@ -15,6 +15,7 @@ import { RefreshTokenService } from './refresh-token.service';
     AuthJwtService,
     AccessTokenGuard,
   ],
+  exports: [AuthService, AuthJwtService, AccessTokenGuard],
 })
 export class AuthModule {}
 

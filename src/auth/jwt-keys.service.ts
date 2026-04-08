@@ -1,22 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createSecretKey, KeyObject } from 'crypto';
+import { createHash, generateKeyPairSync } from 'crypto';
 import { importPKCS8, importSPKI } from 'jose';
-
-type JwtAlg = 'RS256' | 'HS256';
 
 @Injectable()
 export class JwtKeysService {
-  private alg?: JwtAlg;
+  private alg?: 'RS256';
   private privateKey?: unknown;
   private publicKey?: unknown;
-  private hsKey?: KeyObject;
+  private ephemeralPrivatePem?: string;
+  private ephemeralPublicPem?: string;
+  private ephemeralKid?: string;
 
   constructor(private readonly config: ConfigService) {}
-
-  getKid(): string {
-    return this.config.get<string>('AUTH_JWT_KID', 'dev-kid');
-  }
 
   getIssuer(): string {
     return this.config.get<string>('AUTH_ISSUER', 'mixin-auth');
@@ -26,12 +22,14 @@ export class JwtKeysService {
     return this.config.get<string>('AUTH_AUDIENCE', 'api');
   }
 
-  async getAlg(): Promise<JwtAlg> {
+  async getAlg(): Promise<'RS256'> {
     if (this.alg) return this.alg;
     const hasAsymmetric =
       !!this.config.get<string>('AUTH_JWT_PRIVATE_KEY_PEM') &&
       !!this.config.get<string>('AUTH_JWT_PUBLIC_KEY_PEM');
-    this.alg = hasAsymmetric ? 'RS256' : 'HS256';
+    // Prefer RS256 for JWKS interoperability.
+    // In dev, generate ephemeral keys if RSA keys are not provided.
+    this.alg = 'RS256';
     return this.alg;
   }
 
@@ -42,29 +40,46 @@ export class JwtKeysService {
     }
     if (this.privateKey) return this.privateKey;
 
-    const pem = this.mustGetPem('AUTH_JWT_PRIVATE_KEY_PEM');
-    this.privateKey = await importPKCS8(pem, 'RS256');
+    const pem = this.config.get<string>('AUTH_JWT_PRIVATE_KEY_PEM');
+    if (pem) {
+      this.privateKey = await importPKCS8(this.mustGetPem('AUTH_JWT_PRIVATE_KEY_PEM'), 'RS256');
+      return this.privateKey;
+    }
+
+    this.ensureEphemeralKeys();
+    this.privateKey = await importPKCS8(this.ephemeralPrivatePem as string, 'RS256');
     return this.privateKey;
   }
 
   async getPublicKey(): Promise<unknown> {
     const alg = await this.getAlg();
-    if (alg === 'HS256') {
-      // HS256 uses shared secret; use that for verification
-      return this.getHsKey();
-    }
     if (this.publicKey) return this.publicKey;
-    const pem = this.mustGetPem('AUTH_JWT_PUBLIC_KEY_PEM');
-    this.publicKey = await importSPKI(pem, 'RS256');
+
+    const pem = this.config.get<string>('AUTH_JWT_PUBLIC_KEY_PEM');
+    if (pem) {
+      this.publicKey = await importSPKI(this.mustGetPem('AUTH_JWT_PUBLIC_KEY_PEM'), 'RS256');
+      return this.publicKey;
+    }
+
+    this.ensureEphemeralKeys();
+    this.publicKey = await importSPKI(this.ephemeralPublicPem as string, 'RS256');
     return this.publicKey;
   }
 
-  private getHsKey(): KeyObject {
-    if (this.hsKey) return this.hsKey;
-    const secret =
-      this.config.get<string>('AUTH_JWT_HS_SECRET') ?? 'dev-jwt-secret';
-    this.hsKey = createSecretKey(Buffer.from(secret, 'utf8'));
-    return this.hsKey;
+  private ensureEphemeralKeys() {
+    if (this.ephemeralPrivatePem && this.ephemeralPublicPem) return;
+
+    const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+
+    this.ephemeralPrivatePem = privateKey as string;
+    this.ephemeralPublicPem = publicKey as string;
+
+    const digest = createHash('sha256').update(this.ephemeralPublicPem).digest('base64url');
+    this.ephemeralKid = `dev-${digest.slice(0, 16)}`;
   }
 
   private mustGetPem(key: string): string {
@@ -72,6 +87,15 @@ export class JwtKeysService {
     if (!raw) throw new Error(`Missing required env var ${key}`);
     // support keys passed with literal \n
     return raw.includes('\\n') ? raw.replace(/\\n/g, '\n') : raw;
+  }
+
+  getKid(): string {
+    // If explicit KID provided, use it (useful when rotating keys in prod).
+    const configured = this.config.get<string>('AUTH_JWT_KID');
+    if (configured) return configured;
+    // Otherwise use ephemeral kid.
+    if (!this.ephemeralKid) this.ensureEphemeralKeys();
+    return this.ephemeralKid as string;
   }
 }
 

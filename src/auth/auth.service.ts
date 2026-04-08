@@ -140,11 +140,24 @@ export class AuthService {
   }
 
   async switchActiveOrg(input: { userId: string; sessionId: string; orgId: string }) {
-    await this.assertOrgMembership(input.userId, input.orgId);
+    const orgById = await this.prisma.org.findUnique({
+      where: { id: input.orgId },
+      select: { id: true },
+    });
+
+    const orgBySlug = await this.prisma.org.findUnique({
+      where: { slug: input.orgId },
+      select: { id: true },
+    });
+
+    const resolvedOrgId = orgById?.id ?? orgBySlug?.id;
+    if (!resolvedOrgId) throw new ForbiddenException('Org not found');
+
+    await this.assertOrgMembership(input.userId, resolvedOrgId);
 
     const session = await this.prisma.session.update({
       where: { id: input.sessionId },
-      data: { activeOrgId: input.orgId },
+      data: { activeOrgId: resolvedOrgId },
       select: { id: true, userId: true, activeOrgId: true },
     });
 
