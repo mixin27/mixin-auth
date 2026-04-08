@@ -28,6 +28,11 @@ async function verifyGoogleIdToken(params: {
     }
   }
 
+  const emailVerified = (payload as any)?.email_verified;
+  if (emailVerified !== true) {
+    throw new UnauthorizedException('Google email is not verified');
+  }
+
   return payload as any;
 }
 

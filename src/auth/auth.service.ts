@@ -108,7 +108,9 @@ export class AuthService {
       throw new UnauthorizedException('OAuth user not found');
     }
 
-    const activeOrgId = await this.findDefaultOrgIdForUser(userId);
+    const acceptedOrgIds = await this.acceptPendingInvitationsForEmail(userId, email);
+    const activeOrgId =
+      (await this.findDefaultOrgIdForUser(userId)) ?? acceptedOrgIds[0];
 
     const refreshRaw = this.refreshTokens.generateRawToken();
     const refreshHash = this.refreshTokens.hash(refreshRaw);
@@ -142,6 +144,61 @@ export class AuthService {
       roles,
       perms,
     };
+  }
+
+  private async acceptPendingInvitationsForEmail(userId: string, email: string): Promise<string[]> {
+    const now = new Date();
+    const invites = await this.prisma.orgInvitation.findMany({
+      where: {
+        invitedEmail: email,
+        revokedAt: null,
+        acceptedAt: null,
+        expiresAt: { gt: now },
+      },
+      select: {
+        id: true,
+        orgId: true,
+        roles: { select: { roleId: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (invites.length === 0) return [];
+
+    const acceptedOrgIds: string[] = [];
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const inv of invites) {
+        // Upsert membership and activate.
+        const membership = await tx.orgMembership.upsert({
+          where: { orgId_userId: { orgId: inv.orgId, userId } },
+          update: { status: 'ACTIVE' },
+          create: { orgId: inv.orgId, userId, status: 'ACTIVE' },
+          select: { id: true },
+        });
+
+        if (inv.roles.length > 0) {
+          // Replace roles with invited roles (keeps invitation as source of truth).
+          await tx.membershipRole.deleteMany({
+            where: { membershipId: membership.id },
+          });
+          await tx.membershipRole.createMany({
+            data: inv.roles.map((r) => ({ membershipId: membership.id, roleId: r.roleId })),
+            skipDuplicates: true,
+          });
+        }
+
+        await tx.orgInvitation.update({
+          where: { id: inv.id },
+          data: { acceptedAt: now },
+          select: { id: true },
+        });
+
+        acceptedOrgIds.push(inv.orgId);
+      }
+    });
+
+    return acceptedOrgIds;
   }
 
   async login(input: { email: string; password: string; orgId?: string }, meta: { ip?: string; userAgent?: string }) {
