@@ -34,7 +34,114 @@ export class AuthService {
       },
       select: { id: true, email: true, name: true, createdAt: true },
     });
+
+    await this.prisma.account.create({
+      data: {
+        userId: user.id,
+        provider: 'EMAIL',
+        providerAccountId: user.email,
+      },
+    });
+
     return { user };
+  }
+
+  async oauthLogin(input: {
+    provider: 'GOOGLE';
+    providerAccountId: string;
+    email: string;
+    name?: string;
+  }) {
+    const email = input.email.toLowerCase();
+
+    const account =
+      await this.prisma.account.findUnique({
+        where: {
+          provider_providerAccountId: {
+            provider: input.provider,
+            providerAccountId: input.providerAccountId,
+          },
+        },
+        select: { userId: true },
+      });
+
+    let userId: string;
+    let user: { id: string; email: string; name: string | null };
+
+    if (account) {
+      userId = account.userId;
+      user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, email: true, name: true },
+      }).then((u) => u as any);
+    } else {
+      const existingUser = await this.prisma.user.findUnique({
+        where: { email },
+        select: { id: true, email: true, name: true },
+      });
+
+      if (existingUser) {
+        userId = existingUser.id;
+        user = existingUser;
+      } else {
+        const created = await this.prisma.user.create({
+          data: {
+            email,
+            name: input.name,
+          },
+          select: { id: true, email: true, name: true },
+        });
+        userId = created.id;
+        user = created;
+      }
+
+      await this.prisma.account.create({
+        data: {
+          userId,
+          provider: input.provider,
+          providerAccountId: input.providerAccountId,
+        },
+      });
+    }
+
+    if (!user) {
+      throw new UnauthorizedException('OAuth user not found');
+    }
+
+    const activeOrgId = await this.findDefaultOrgIdForUser(userId);
+
+    const refreshRaw = this.refreshTokens.generateRawToken();
+    const refreshHash = this.refreshTokens.hash(refreshRaw);
+    const expiresAt = this.refreshTokens.getExpiryDate();
+
+    const session = await this.prisma.session.create({
+      data: {
+        userId,
+        refreshTokenHash: refreshHash,
+        expiresAt,
+        activeOrgId: activeOrgId ?? null,
+      },
+      select: { id: true, activeOrgId: true, expiresAt: true },
+    });
+
+    const { roles, perms } = await this.getRolesAndPerms(userId, activeOrgId ?? undefined);
+    const accessToken = await this.jwt.signAccessToken({
+      sub: userId,
+      sid: session.id,
+      org_id: activeOrgId ?? undefined,
+      roles,
+      perms,
+    });
+
+    return {
+      accessToken,
+      refreshToken: refreshRaw,
+      refreshExpiresAt: session.expiresAt,
+      user,
+      activeOrgId: activeOrgId ?? null,
+      roles,
+      perms,
+    };
   }
 
   async login(input: { email: string; password: string; orgId?: string }, meta: { ip?: string; userAgent?: string }) {

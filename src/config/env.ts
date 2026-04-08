@@ -31,6 +31,10 @@ export const envSchema = z
     COOKIE_DOMAIN: z.string().optional(),
     COOKIE_SECURE: boolFromString.default(false),
     COOKIE_SAMESITE: z.enum(['lax', 'strict', 'none']).default('lax'),
+
+    GOOGLE_CLIENT_ID: z.string().optional(),
+    GOOGLE_CLIENT_SECRET: z.string().optional(),
+    GOOGLE_REDIRECT_URI: z.string().optional(),
   })
   .superRefine((val, ctx) => {
     if (val.NODE_ENV === 'production') {
