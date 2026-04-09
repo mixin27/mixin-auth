@@ -46,6 +46,13 @@ export class InvitationsService {
     });
 
     if (!membership || membership.status !== 'ACTIVE') {
+      await this.audit.log({
+        eventType: 'INVITATION_CREATE',
+        outcome: 'FAILURE',
+        actorUserId: input.invitedByUserId,
+        orgId: input.orgId,
+        metadata: { reason: 'not_member_or_inactive' },
+      });
       throw new ForbiddenException('Not a member of this org');
     }
 
@@ -53,6 +60,13 @@ export class InvitationsService {
       mr.role.permissions.map((rp) => rp.permission.key),
     );
     if (!perms.includes('org:manage')) {
+      await this.audit.log({
+        eventType: 'INVITATION_CREATE',
+        outcome: 'FAILURE',
+        actorUserId: input.invitedByUserId,
+        orgId: input.orgId,
+        metadata: { reason: 'missing_permission', permissionKey: 'org:manage' },
+      });
       throw new ForbiddenException('Missing required permission');
     }
 
@@ -62,7 +76,16 @@ export class InvitationsService {
       where: { id: input.orgId },
       select: { id: true },
     });
-    if (!org) throw new NotFoundException('Org not found');
+    if (!org) {
+      await this.audit.log({
+        eventType: 'INVITATION_CREATE',
+        outcome: 'FAILURE',
+        actorUserId: input.invitedByUserId,
+        orgId: input.orgId,
+        metadata: { reason: 'org_not_found' },
+      });
+      throw new NotFoundException('Org not found');
+    }
 
     // Generate token + store only hash.
     const rawToken = this.refreshTokens.generateRawToken();
@@ -88,6 +111,13 @@ export class InvitationsService {
       });
 
       if (roleIdRows.length !== input.roleKeys.length) {
+        await this.audit.log({
+          eventType: 'INVITATION_CREATE',
+          outcome: 'FAILURE',
+          actorUserId: input.invitedByUserId,
+          orgId: input.orgId,
+          metadata: { reason: 'role_not_found', roleKeys: input.roleKeys },
+        });
         throw new NotFoundException('One or more roles not found');
       }
 
@@ -135,11 +165,31 @@ export class InvitationsService {
       },
     });
 
-    if (!invitation) throw new UnauthorizedException('Invalid or expired invitation token');
+    if (!invitation) {
+      await this.audit.log({
+        eventType: 'INVITATION_ACCEPT',
+        outcome: 'FAILURE',
+        orgId: params.orgId,
+        ip: params.meta.ip,
+        userAgent: params.meta.userAgent,
+        metadata: { reason: 'invalid_or_expired_token', email: params.dto.email },
+      });
+      throw new UnauthorizedException('Invalid or expired invitation token');
+    }
 
     const emailFromInvite = invitation.invitedEmail.toLowerCase();
     const emailProvided = params.dto.email?.trim().toLowerCase();
     if (emailProvided && emailProvided !== emailFromInvite) {
+      await this.audit.log({
+        eventType: 'INVITATION_ACCEPT',
+        outcome: 'FAILURE',
+        orgId: params.orgId,
+        targetType: 'INVITATION',
+        targetId: invitation.id,
+        ip: params.meta.ip,
+        userAgent: params.meta.userAgent,
+        metadata: { reason: 'email_mismatch', provided: emailProvided },
+      });
       throw new ForbiddenException('Invitation email mismatch');
     }
 
@@ -181,7 +231,20 @@ export class InvitationsService {
         });
       } else {
         const ok = await argon2.verify(user.passwordHash, password);
-        if (!ok) throw new UnauthorizedException('Invalid password');
+        if (!ok) {
+          await this.audit.log({
+            eventType: 'INVITATION_ACCEPT',
+            outcome: 'FAILURE',
+            actorUserId: user.id,
+            orgId: params.orgId,
+            targetType: 'INVITATION',
+            targetId: invitation.id,
+            ip: params.meta.ip,
+            userAgent: params.meta.userAgent,
+            metadata: { reason: 'invalid_password' },
+          });
+          throw new UnauthorizedException('Invalid password');
+        }
       }
 
       // Ensure account exists.

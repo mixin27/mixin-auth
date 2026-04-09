@@ -29,6 +29,15 @@ export class RbacService {
     });
 
     if (!membership || membership.status !== 'ACTIVE') {
+      await this.audit.log({
+        eventType: 'RBAC_PERMISSION_CHECK',
+        outcome: 'FAILURE',
+        actorUserId: userId,
+        orgId,
+        targetType: 'ORG',
+        targetId: orgId,
+        metadata: { permissionKey, reason: 'not_member_or_inactive' },
+      });
       throw new ForbiddenException('Not a member of this org');
     }
 
@@ -37,6 +46,15 @@ export class RbacService {
     );
 
     if (!perms.includes(permissionKey)) {
+      await this.audit.log({
+        eventType: 'RBAC_PERMISSION_CHECK',
+        outcome: 'FAILURE',
+        actorUserId: userId,
+        orgId,
+        targetType: 'ORG',
+        targetId: orgId,
+        metadata: { permissionKey, reason: 'missing_permission' },
+      });
       throw new ForbiddenException('Missing required permission');
     }
   }

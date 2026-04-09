@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { randomBytes } from 'crypto';
+import { AuditService } from '../../audit/audit.service';
 import { GoogleAuthService } from './google-auth.service';
 import { REFRESH_COOKIE_NAME } from '../auth.constants';
 import { AccessTokenGuard } from '../guards/access-token.guard';
@@ -25,6 +26,7 @@ function base64UrlEncode(buf: Buffer): string {
 export class GoogleAuthController {
   constructor(
     private readonly google: GoogleAuthService,
+    private readonly audit: AuditService,
     private readonly config: ConfigService,
   ) {}
 
@@ -87,58 +89,69 @@ export class GoogleAuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    if (error) {
-      throw new Error(`Google OAuth error: ${error}`);
+    try {
+      if (error) {
+        throw new Error(`Google OAuth error: ${error}`);
+      }
+      if (!code || !state) throw new Error('Missing code/state from Google callback');
+
+      const expectedState = req.cookies?.[GOOGLE_LOGIN_COOKIE_STATE];
+      const codeVerifier = req.cookies?.[GOOGLE_LOGIN_COOKIE_VERIFIER];
+      const expectedNonce = req.cookies?.[GOOGLE_LOGIN_COOKIE_NONCE];
+
+      if (!expectedState || typeof expectedState !== 'string') {
+        throw new Error('Missing expected OAuth state');
+      }
+      if (!codeVerifier || typeof codeVerifier !== 'string') {
+        throw new Error('Missing expected OAuth code verifier');
+      }
+
+      const secure = this.config.get<boolean>('COOKIE_SECURE', false);
+      const sameSite = this.config.get<'lax' | 'strict' | 'none'>(
+        'COOKIE_SAMESITE',
+        'lax',
+      );
+      const domain = this.config.get<string | undefined>('COOKIE_DOMAIN');
+
+      const result = await this.google.handleCallback({
+        code,
+        state,
+        expectedState,
+        codeVerifier,
+        expectedNonce: typeof expectedNonce === 'string' ? expectedNonce : undefined,
+      });
+
+      res.cookie(REFRESH_COOKIE_NAME, result.refreshToken, {
+        httpOnly: true,
+        secure,
+        sameSite,
+        domain,
+        path: '/v1/auth',
+        expires: result.refreshExpiresAt,
+      });
+
+      // Clear OAuth cookies after successful flow.
+      res.clearCookie(GOOGLE_LOGIN_COOKIE_STATE, { path: '/v1/auth/google', domain });
+      res.clearCookie(GOOGLE_LOGIN_COOKIE_VERIFIER, { path: '/v1/auth/google', domain });
+      res.clearCookie(GOOGLE_LOGIN_COOKIE_NONCE, { path: '/v1/auth/google', domain });
+
+      return {
+        accessToken: result.accessToken,
+        user: result.user,
+        activeOrgId: result.activeOrgId,
+        roles: result.roles,
+        perms: result.perms,
+      };
+    } catch (e: any) {
+      await this.audit.log({
+        eventType: 'AUTH_OAUTH_GOOGLE_CALLBACK',
+        outcome: 'FAILURE',
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+        metadata: { message: String(e?.message ?? e) },
+      });
+      throw e;
     }
-    if (!code || !state) throw new Error('Missing code/state from Google callback');
-
-    const expectedState = req.cookies?.[GOOGLE_LOGIN_COOKIE_STATE];
-    const codeVerifier = req.cookies?.[GOOGLE_LOGIN_COOKIE_VERIFIER];
-    const expectedNonce = req.cookies?.[GOOGLE_LOGIN_COOKIE_NONCE];
-
-    if (!expectedState || typeof expectedState !== 'string') {
-      throw new Error('Missing expected OAuth state');
-    }
-    if (!codeVerifier || typeof codeVerifier !== 'string') {
-      throw new Error('Missing expected OAuth code verifier');
-    }
-
-    const secure = this.config.get<boolean>('COOKIE_SECURE', false);
-    const sameSite = this.config.get<'lax' | 'strict' | 'none'>(
-      'COOKIE_SAMESITE',
-      'lax',
-    );
-    const domain = this.config.get<string | undefined>('COOKIE_DOMAIN');
-
-    const result = await this.google.handleCallback({
-      code,
-      state,
-      expectedState,
-      codeVerifier,
-      expectedNonce: typeof expectedNonce === 'string' ? expectedNonce : undefined,
-    });
-
-    res.cookie(REFRESH_COOKIE_NAME, result.refreshToken, {
-      httpOnly: true,
-      secure,
-      sameSite,
-      domain,
-      path: '/v1/auth',
-      expires: result.refreshExpiresAt,
-    });
-
-    // Clear OAuth cookies after successful flow.
-    res.clearCookie(GOOGLE_LOGIN_COOKIE_STATE, { path: '/v1/auth/google', domain });
-    res.clearCookie(GOOGLE_LOGIN_COOKIE_VERIFIER, { path: '/v1/auth/google', domain });
-    res.clearCookie(GOOGLE_LOGIN_COOKIE_NONCE, { path: '/v1/auth/google', domain });
-
-    return {
-      accessToken: result.accessToken,
-      user: result.user,
-      activeOrgId: result.activeOrgId,
-      roles: result.roles,
-      perms: result.perms,
-    };
   }
 
   @Get('/v1/auth/google/link')
@@ -212,49 +225,64 @@ export class GoogleAuthController {
     @Req() req: Request & any,
     @Res({ passthrough: true }) res: Response,
   ) {
-    if (error) {
-      throw new Error(`Google OAuth error: ${error}`);
+    try {
+      if (error) {
+        throw new Error(`Google OAuth error: ${error}`);
+      }
+      if (!code || !state) throw new Error('Missing code/state from Google callback');
+
+      const auth = req.auth;
+      if (!auth?.sub || !auth?.sid) throw new UnauthorizedException();
+
+      const expectedState = req.cookies?.[GOOGLE_LINK_COOKIE_STATE];
+      const codeVerifier = req.cookies?.[GOOGLE_LINK_COOKIE_VERIFIER];
+      const expectedNonce = req.cookies?.[GOOGLE_LINK_COOKIE_NONCE];
+      const expectedUid = req.cookies?.[GOOGLE_LINK_COOKIE_UID];
+
+      if (!expectedState || typeof expectedState !== 'string') {
+        throw new Error('Missing expected OAuth state');
+      }
+      if (!codeVerifier || typeof codeVerifier !== 'string') {
+        throw new Error('Missing expected OAuth code verifier');
+      }
+      if (!expectedUid || typeof expectedUid !== 'string' || expectedUid !== auth.sub) {
+        throw new UnauthorizedException('Link user mismatch');
+      }
+
+      const domain = this.config.get<string | undefined>('COOKIE_DOMAIN');
+
+      const result = await this.google.handleLinkCallback({
+        userId: auth.sub,
+        sessionId: auth.sid,
+        currentOrgId: auth.org_id,
+        code,
+        state,
+        expectedState,
+        codeVerifier,
+        expectedNonce: typeof expectedNonce === 'string' ? expectedNonce : undefined,
+      });
+
+      // Clear link cookies after successful flow.
+      res.clearCookie(GOOGLE_LINK_COOKIE_STATE, { path: '/v1/auth/google/link', domain });
+      res.clearCookie(GOOGLE_LINK_COOKIE_VERIFIER, { path: '/v1/auth/google/link', domain });
+      res.clearCookie(GOOGLE_LINK_COOKIE_NONCE, { path: '/v1/auth/google/link', domain });
+      res.clearCookie(GOOGLE_LINK_COOKIE_UID, { path: '/v1/auth/google/link', domain });
+
+      return result;
+    } catch (e: any) {
+      const auth = req.auth;
+      await this.audit.log({
+        eventType: 'AUTH_OAUTH_GOOGLE_LINK_CALLBACK',
+        outcome: 'FAILURE',
+        actorUserId: auth?.sub,
+        sessionId: auth?.sid,
+        orgId: auth?.org_id,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+        metadata: { message: String(e?.message ?? e) },
+      });
+      throw e;
     }
-    if (!code || !state) throw new Error('Missing code/state from Google callback');
-
-    const auth = req.auth;
-    if (!auth?.sub || !auth?.sid) throw new UnauthorizedException();
-
-    const expectedState = req.cookies?.[GOOGLE_LINK_COOKIE_STATE];
-    const codeVerifier = req.cookies?.[GOOGLE_LINK_COOKIE_VERIFIER];
-    const expectedNonce = req.cookies?.[GOOGLE_LINK_COOKIE_NONCE];
-    const expectedUid = req.cookies?.[GOOGLE_LINK_COOKIE_UID];
-
-    if (!expectedState || typeof expectedState !== 'string') {
-      throw new Error('Missing expected OAuth state');
-    }
-    if (!codeVerifier || typeof codeVerifier !== 'string') {
-      throw new Error('Missing expected OAuth code verifier');
-    }
-    if (!expectedUid || typeof expectedUid !== 'string' || expectedUid !== auth.sub) {
-      throw new UnauthorizedException('Link user mismatch');
-    }
-
-    const domain = this.config.get<string | undefined>('COOKIE_DOMAIN');
-
-    const result = await this.google.handleLinkCallback({
-      userId: auth.sub,
-      sessionId: auth.sid,
-      currentOrgId: auth.org_id,
-      code,
-      state,
-      expectedState,
-      codeVerifier,
-      expectedNonce: typeof expectedNonce === 'string' ? expectedNonce : undefined,
-    });
-
-    // Clear link cookies after successful flow.
-    res.clearCookie(GOOGLE_LINK_COOKIE_STATE, { path: '/v1/auth/google/link', domain });
-    res.clearCookie(GOOGLE_LINK_COOKIE_VERIFIER, { path: '/v1/auth/google/link', domain });
-    res.clearCookie(GOOGLE_LINK_COOKIE_NONCE, { path: '/v1/auth/google/link', domain });
-    res.clearCookie(GOOGLE_LINK_COOKIE_UID, { path: '/v1/auth/google/link', domain });
-
-    return result;
   }
 }
 
